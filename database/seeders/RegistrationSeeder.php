@@ -13,6 +13,7 @@ use Illuminate\Database\Seeder;
 class RegistrationSeeder extends Seeder
 {
     private const JOHN_EMAIL = 'john.kibuna@example.com';
+    private const PARTICIPANT_TARGET = 300;
 
     public function run(): void
     {
@@ -21,21 +22,33 @@ class RegistrationSeeder extends Seeder
         $participants = $this->participants();
         $participantUsers = $this->participantUsers($participants);
 
+        if ($conferences->isEmpty()) {
+            return;
+        }
+
+        $participantsPerConference = (int) ceil(count($participants) / $conferences->count());
+        $conferenceParticipantGroups = array_chunk($participants, $participantsPerConference);
+
         foreach ($conferences as $conferenceIndex => $conference) {
-            $conferenceParticipants = array_slice($participants, $conferenceIndex * 3, 3);
+            $conferenceParticipants = $conferenceParticipantGroups[$conferenceIndex] ?? [];
 
             foreach ($conferenceParticipants as $participantIndex => $participantData) {
                 /** @var \App\Models\User $participant */
                 $participant = $participantUsers[$participantData['email']];
-                $confirmed = $participantIndex !== 2;
+                $confirmed = (($participantIndex + $conferenceIndex + 1) % 5) !== 0;
 
-                $registration = Registration::updateOrCreate(
+                $registration = Registration::firstOrCreate(
                     [
                         'conference_id' => $conference->id,
                         'participant_id' => $participant->id,
                     ],
                     [
-                        'registration_code' => sprintf('CONF-%02d-P%02d', $conference->id, $participantIndex + 1),
+                        'registration_code' => sprintf('CONF-%02d-P%03d', $conference->id, $participantIndex + 1),
+                    ],
+                );
+
+                $registration->fill(
+                    [
                         'status' => 'registered',
                         'confirmed' => $confirmed,
                         'confirmed_at' => $confirmed
@@ -43,6 +56,7 @@ class RegistrationSeeder extends Seeder
                             : null,
                     ],
                 );
+                $registration->save();
 
                 $this->seedRegistrationAnswers($conference, $registration, $participant, $participantData);
                 $this->seedCheckin($conference, $registration, $johnKibuna->id, $participantIndex, $confirmed);
@@ -53,25 +67,63 @@ class RegistrationSeeder extends Seeder
 
     private function participants(): array
     {
-        return [
-            $this->participant('Akinyi Odhiambo', 'akinyi.odhiambo@example.com', '+254711000101', 'Kisumu', 'LakeTech Events'),
-            $this->participant('Brian Njoroge', 'brian.njoroge@example.com', '+254711000102', 'Kiambu', 'Nairobi Dev Community'),
-            $this->participant('Catherine Wanjiku', 'catherine.wanjiku@example.com', '+254711000103', 'Nairobi', 'Afya Digital Hub'),
-            $this->participant('David Kiptoo', 'david.kiptoo@example.com', '+254711000104', 'Uasin Gishu', 'Rift Valley Innovations'),
-            $this->participant('Faith Atieno', 'faith.atieno@example.com', '+254711000105', 'Mombasa', 'Coastline Events'),
-            $this->participant('Kevin Mutua', 'kevin.mutua@example.com', '+254711000106', 'Nakuru', 'Savannah Systems'),
+        $firstNames = [
+            'Akinyi', 'Brian', 'Catherine', 'David', 'Faith',
+            'Kevin', 'Lucy', 'Martin', 'Naomi', 'Oscar',
+            'Purity', 'Quincy', 'Rose', 'Samuel', 'Tina',
+            'Victor', 'Winnie', 'Yvonne', 'Zack', 'Mercy',
         ];
+
+        $lastNames = [
+            'Odhiambo', 'Njoroge', 'Wanjiku', 'Kiptoo', 'Atieno',
+            'Mutua', 'Kamau', 'Otieno', 'Achieng', 'Mwangi',
+            'Kariuki', 'Jepkorir', 'Nduta', 'Omondi', 'Cheruiyot',
+        ];
+
+        $counties = ['Nairobi', 'Kiambu', 'Mombasa', 'Kisumu', 'Nakuru', 'Uasin Gishu'];
+
+        $organizations = [
+            'LakeTech Events',
+            'Nairobi Dev Community',
+            'Afya Digital Hub',
+            'Rift Valley Innovations',
+            'Coastline Events',
+            'Savannah Systems',
+            'SummitOps Africa',
+            'Karibu Conferences',
+            'Eastern Region Labs',
+            'Metro Event Tech',
+        ];
+
+        $participants = [];
+        $lastNameCount = count($lastNames);
+
+        for ($index = 0; $index < self::PARTICIPANT_TARGET; $index++) {
+            $participantNumber = $index + 1;
+            $firstName = $firstNames[intdiv($index, $lastNameCount)];
+            $lastName = $lastNames[$index % $lastNameCount];
+
+            $participants[] = $this->participant(
+                "{$firstName} {$lastName}",
+                strtolower(sprintf('%s.%s@gmail.com', $firstName, $lastName)),
+                sprintf('+2547%08d', 11000000 + $participantNumber),
+                $counties[$index % count($counties)],
+                $organizations[$index % count($organizations)],
+            );
+        }
+
+        return $participants;
     }
 
     private function participantUsers(array $participants)
     {
         return collect($participants)->mapWithKeys(function (array $participantData) {
             $user = User::updateOrCreate(
-                ['email' => $participantData['email']],
+                ['phone' => $participantData['phone']],
                 [
                     'name' => $participantData['name'],
+                    'email' => $participantData['email'],
                     'role' => 'participant',
-                    'phone' => $participantData['phone'],
                     'email_verified_at' => now(),
                     'password' => 'password',
                 ],

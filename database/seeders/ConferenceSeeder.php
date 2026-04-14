@@ -18,6 +18,7 @@ class ConferenceSeeder extends Seeder
     private const JOHN_EMAIL = 'john.kibuna@example.com';
     private const JOHN_MODERATOR_EMAIL = 'john.kibuna.moderator@example.com';
     private const JOHN_PHONE = '+254700123456';
+    private const SPEAKER_TARGET = 50;
 
     public function run(): void
     {
@@ -32,7 +33,17 @@ class ConferenceSeeder extends Seeder
             ],
         );
 
-        foreach ($this->conferenceBlueprints() as $conferenceData) {
+        $conferenceBlueprints = $this->conferenceBlueprints();
+        $existingSpeakerCount = collect($conferenceBlueprints)->sum(fn (array $conferenceData): int => count($conferenceData['speakers']));
+        $generatedSpeakerCount = max(self::SPEAKER_TARGET - $existingSpeakerCount, 0);
+        $generatedSpeakerGroups = $generatedSpeakerCount > 0
+            ? array_chunk(
+                $this->generatedSpeakers($generatedSpeakerCount),
+                (int) ceil($generatedSpeakerCount / count($conferenceBlueprints)),
+            )
+            : [];
+
+        foreach ($conferenceBlueprints as $conferenceIndex => $conferenceData) {
             $conference = Conference::updateOrCreate(
                 ['title' => $conferenceData['title']],
                 [
@@ -47,7 +58,11 @@ class ConferenceSeeder extends Seeder
             );
 
             $this->seedRegistrationFields($conference);
-            $speakersByEmail = $this->seedSpeakers($conference, $conferenceData['speakers']);
+            $speakers = array_merge(
+                $conferenceData['speakers'],
+                $generatedSpeakerGroups[$conferenceIndex] ?? [],
+            );
+            $speakersByEmail = $this->seedSpeakers($conference, $speakers);
             $this->seedSessions($conference, $conferenceData['sessions'], $speakersByEmail);
             $this->seedAnnouncements($conference, $conferenceData['announcements'], $johnKibuna->id);
         }
@@ -172,6 +187,61 @@ class ConferenceSeeder extends Seeder
                 'sort_order' => 4,
             ],
         ];
+    }
+
+    private function generatedSpeakers(int $count): array
+    {
+        $firstNames = [
+            'Alice', 'Ben', 'Caroline', 'Dennis', 'Esther',
+            'Felix', 'Grace', 'Hassan', 'Irene', 'James',
+            'Lydia', 'Michael', 'Nadia', 'Patrick', 'Queenie',
+            'Robert', 'Stella', 'Tony', 'Valerie', 'Willis',
+            'Xavier', 'Yvette', 'Zawadi', 'Brenda', 'Collins',
+        ];
+
+        $lastNames = [
+            'Mwangi', 'Otieno', 'Kariuki', 'Wanjala', 'Mutiso',
+            'Achieng', 'Kiprono', 'Njeri', 'Wekesa', 'Omollo',
+        ];
+
+        $themes = [
+            'AI adoption for event operations',
+            'speaker readiness and coordination',
+            'digital registration design',
+            'hybrid conference facilitation',
+            'attendee engagement strategy',
+            'event communications and follow-up',
+            'operations analytics for conferences',
+            'community-driven program design',
+        ];
+
+        $organizations = [
+            'EventOps Kenya',
+            'SummitWorks Africa',
+            'Digital Stage Collective',
+            'Conference Lab East Africa',
+            'Nairobi Innovation Forum',
+        ];
+
+        $speakers = [];
+        $lastNameCount = count($lastNames);
+
+        for ($index = 0; $index < $count; $index++) {
+            $speakerNumber = $index + 1;
+            $firstName = $firstNames[intdiv($index, $lastNameCount)];
+            $lastName = $lastNames[$index % $lastNameCount];
+            $theme = $themes[$index % count($themes)];
+            $organization = $organizations[$index % count($organizations)];
+            $name = "{$firstName} {$lastName}";
+
+            $speakers[] = $this->speaker(
+                strtolower(sprintf('%s.%s.speaker.%03d@example.com', $firstName, $lastName, $speakerNumber)),
+                $name,
+                "{$name} leads {$theme} at {$organization}, bringing practical experience from large-scale events across Kenya.",
+            );
+        }
+
+        return $speakers;
     }
 
     private function seedRegistrationFields(Conference $conference): void
