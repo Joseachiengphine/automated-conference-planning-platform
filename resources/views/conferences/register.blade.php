@@ -245,9 +245,27 @@
                         <div class="meta-chip"><i class="bi bi-hourglass-split text-primary"></i>Closes {{ $conference->registration_deadline?->format('M d, Y') }}</div>
                     </div>
 
+                    @php
+                        $visibleErrorKeys = $registrationFields
+                            ->map(fn ($field) => 'answers.' . $field->field_key)
+                            ->all();
+                        $summaryErrors = collect($errors->getMessages())
+                            ->filter(fn ($messages, $key) => ! in_array($key, $visibleErrorKeys, true))
+                            ->flatten()
+                            ->unique()
+                            ->values();
+                    @endphp
+
                     @if ($errors->any())
                         <div class="alert alert-danger rounded-4 border-0 mb-4">
                             <strong>Please fix the highlighted fields and try again.</strong>
+                            @if($summaryErrors->isNotEmpty())
+                                <ul class="mb-0 mt-2 ps-3">
+                                    @foreach($summaryErrors as $message)
+                                        <li>{{ $message }}</li>
+                                    @endforeach
+                                </ul>
+                            @endif
                         </div>
                     @endif
 

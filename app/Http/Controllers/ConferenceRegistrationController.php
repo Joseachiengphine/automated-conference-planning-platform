@@ -12,6 +12,7 @@ use chillerlan\QRCode\QROptions;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
@@ -56,7 +57,7 @@ class ConferenceRegistrationController extends Controller
         )->validate();
 
         $answers = collect($validated['answers'] ?? []);
-        $identity = $this->resolveParticipantIdentity($answers);
+        $identity = $this->resolveParticipantIdentity($conference, $answers);
 
         DB::transaction(function () use ($conference, $answers, $identity, &$registration): void {
             $participant = $this->upsertParticipant($identity);
@@ -144,20 +145,42 @@ class ConferenceRegistrationController extends Controller
             ->all();
     }
 
-    private function resolveParticipantIdentity($answers): array
+    private function resolveParticipantIdentity(Conference $conference, Collection $answers): array
     {
-        $name = $this->firstMatchingAnswer($answers, ['full_name', 'name', 'participant_name']);
-        $email = $this->firstMatchingAnswer($answers, ['email_address', 'email', 'participant_email']);
-        $phone = $this->firstMatchingAnswer($answers, ['phone', 'phone_number', 'mobile_number']);
+        $nameFieldKey = $this->bestMatchingFieldKey(
+            $conference,
+            ['full_name', 'name', 'participant_name', 'attendee_name'],
+            ['full name', 'name', 'participant name', 'attendee name'],
+            excludedKeywords: ['organization', 'company', 'business', 'institution', 'employer'],
+        );
+        $emailFieldKey = $this->bestMatchingFieldKey(
+            $conference,
+            ['email_address', 'email', 'participant_email', 'attendee_email'],
+            ['email', 'email address', 'participant email', 'attendee email'],
+            preferredTypes: ['email'],
+        );
+        $phoneFieldKey = $this->bestMatchingFieldKey(
+            $conference,
+            ['phone', 'phone_number', 'mobile_number', 'contact_number'],
+            ['phone', 'phone number', 'mobile', 'mobile number', 'contact number'],
+        );
+
+        $name = filled($nameFieldKey) ? $this->firstMatchingAnswer($answers, [$nameFieldKey]) : null;
+        $email = filled($emailFieldKey) ? $this->firstMatchingAnswer($answers, [$emailFieldKey]) : null;
+        $phone = filled($phoneFieldKey) ? $this->firstMatchingAnswer($answers, [$phoneFieldKey]) : null;
 
         $messages = [];
 
         if (blank($name)) {
-            $messages['answers.full_name'] = 'Add a name field to the registration form and fill it in before submitting.';
+            $messages[$nameFieldKey ? "answers.{$nameFieldKey}" : 'identity.name'] = $nameFieldKey
+                ? 'Fill in the attendee name before submitting.'
+                : 'Add a name question to the registration form before collecting registrations.';
         }
 
         if (blank($email)) {
-            $messages['answers.email_address'] = 'Add an email field to the registration form and fill it in before submitting.';
+            $messages[$emailFieldKey ? "answers.{$emailFieldKey}" : 'identity.email'] = $emailFieldKey
+                ? 'Fill in the attendee email before submitting.'
+                : 'Add an email question to the registration form before collecting registrations.';
         }
 
         if ($messages !== []) {
@@ -182,6 +205,91 @@ class ConferenceRegistrationController extends Controller
         }
 
         return null;
+    }
+
+    private function bestMatchingFieldKey(
+        Conference $conference,
+        array $preferredKeys,
+        array $labelKeywords,
+        array $preferredTypes = [],
+        array $excludedKeywords = [],
+    ): ?string {
+        $match = $conference->registrationFields
+            ->map(function ($field) use ($preferredKeys, $labelKeywords, $preferredTypes, $excludedKeywords): array {
+                return [
+                    'field_key' => $field->field_key,
+                    'score' => $this->scoreFieldMatch(
+                        $field->field_key,
+                        $field->label,
+                        $field->field_type,
+                        $preferredKeys,
+                        $labelKeywords,
+                        $preferredTypes,
+                        $excludedKeywords,
+                    ),
+                ];
+            })
+            ->filter(fn (array $candidate): bool => $candidate['score'] > 0)
+            ->sortByDesc('score')
+            ->first();
+
+        return $match['field_key'] ?? null;
+    }
+
+    private function scoreFieldMatch(
+        string $fieldKey,
+        string $label,
+        string $fieldType,
+        array $preferredKeys,
+        array $labelKeywords,
+        array $preferredTypes,
+        array $excludedKeywords,
+    ): int {
+        $normalizedKey = Str::of($fieldKey)->lower()->replace('-', '_')->toString();
+        $normalizedLabel = Str::of($label)->lower()->squish()->toString();
+        $score = 0;
+
+        foreach ($preferredKeys as $preferredKey) {
+            $normalizedPreferredKey = Str::of($preferredKey)->lower()->replace('-', '_')->toString();
+
+            if ($normalizedKey === $normalizedPreferredKey) {
+                $score += 100;
+                continue;
+            }
+
+            if (str_contains($normalizedKey, $normalizedPreferredKey)) {
+                $score += 60;
+            }
+        }
+
+        foreach ($labelKeywords as $keyword) {
+            $normalizedKeyword = Str::of($keyword)->lower()->squish()->toString();
+            $keywordKey = Str::of($keyword)->lower()->replace(' ', '_')->toString();
+
+            if ($normalizedLabel === $normalizedKeyword || $normalizedKey === $keywordKey) {
+                $score += 90;
+                continue;
+            }
+
+            if (str_contains($normalizedLabel, $normalizedKeyword) || str_contains($normalizedKey, $keywordKey)) {
+                $score += 35;
+            }
+        }
+
+        if (in_array($fieldType, $preferredTypes, true)) {
+            $score += 50;
+        }
+
+        foreach ($excludedKeywords as $keyword) {
+            $normalizedKeyword = Str::of($keyword)->lower()->squish()->toString();
+            $keywordKey = Str::of($keyword)->lower()->replace(' ', '_')->toString();
+
+            if (str_contains($normalizedLabel, $normalizedKeyword) || str_contains($normalizedKey, $keywordKey)) {
+                $score -= 120;
+            }
+        }
+
+        return max($score, 0);
     }
 
     private function upsertParticipant(array $identity): User
